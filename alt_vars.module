@@ -65,6 +65,29 @@ function alt_vars_get($key) {
 }
 
 /**
+ * Alternate variable Delete Function.
+ * 
+ * @param String $key
+ *    The name of the variable to be deleted.
+ * @return Boolean $status
+ *    Return 1/0 as delete status.
+ */
+function alt_vars_delete($key) {
+  $status = 0;
+  try {
+    db_delete('alternate_variable')
+        ->condition('name', $key, '=')
+        ->execute();
+    $status = 1;
+    return $status;
+  }
+  catch (Exception $e) {
+    watchdog('alt_vars', 'There is an error !error in deleting !key ', array('!error' => $e->getMessage(), '!key' => $key), WATCHDOG_ERROR);
+    return $status;
+  }
+}
+
+/**
  * Implements hook_feature_revert().
  */
 function alternate_variable_features_revert($module) {
