@@ -1,0 +1,146 @@
+<?php
+
+/**
+ * @file
+ * Provide exportable alternate to variables table.
+ */
+
+/**
+ * Load all variables
+ */
+function alt_vars_vars_load($sorted = TRUE, $reset = FALSE) {
+  ctools_include('export');
+  static $vars;
+
+  // Ensure that the schema cache is not stale when trying to load.
+  $schema = drupal_get_schema('alternate_variable');
+  if (!isset($schema['export']) || $reset) {
+    ctools_export_load_object_reset('alternate_variable');
+    drupal_get_schema('alternate_variable', TRUE);
+  }
+
+  // Load vars.
+  if (!isset($vars) || $reset) {
+    $vars = ctools_export_load_object('alternate_variable');
+    if ($sorted) {
+      ksort($vars);
+    }
+  }
+  return $vars;
+}
+
+/**
+ * Alternate variable Setter Function.
+ * 
+ * Sets Value for a variable in alternate_variable table.
+ *
+ * @param String $name
+ *    The name of the variable to set.
+ * @param String $value
+ *    The value to set. This can be any PHP data type; these functions take care
+ *    of serialization as necessary.
+ */
+function alt_vars_set($name, $value) {
+  db_merge('alternate_variable')->key(array('name' => $name))->fields(array('value' => serialize($value)))->execute();
+}
+
+/**
+ * Alternate variable Getter Function.
+ *
+ * @param String $key
+ *    The name of the variable to get.
+ * @return String $variable_value
+ *    The value for the given variable name.
+ */
+function alt_vars_get($key) {
+  $query_variable = db_select('alternate_variable', 'av')
+      ->fields('av', array('value'))
+      ->condition('name', $key)
+      ->execute()
+      ->fetchField(0);
+  if (!is_null($query_variable)) {
+    $variable_value = unserialize($query_variable);
+  }
+  return $variable_value;
+}
+
+/**
+ * Implements hook_feature_revert().
+ */
+function alternate_variable_features_revert($module) {
+  $defaults = features_get_default('alternate_variable', $module);
+  if (empty($defaults)) {
+    return;
+  }
+  $vars = alt_vars_vars_load(TRUE, TRUE);
+  foreach ($defaults as $name => $default) {
+    if (!empty($vars[$name]->in_code_only) || ($default->value !== $vars[$name]->value)) {
+      alt_vars_set($name, $default->value);
+    }
+  }
+}
+
+/**
+ * Implements hook_features_rebuild().
+ * Same as revert, but we only want to force variables only in code into the database
+ */
+function alternate_variable_features_rebuild($module) {
+  $defaults = features_get_default('alternate_variable', $module);
+  if (empty($defaults)) {
+    return;
+  }
+
+  $vars = alt_vars_vars_load(TRUE, TRUE);
+  foreach ($defaults as $name => $default) {
+    if (!empty($vars[$name]->in_code_only) || (drupal_installation_attempted() && $vars[$name]->export_type & EXPORT_IN_CODE)) {
+      alt_vars_set($name, $default->value);
+    }
+  }
+}
+
+/**
+ * Implements hook_features_export().
+ *
+ * This is implemented to remove variables that are in code, but not DB.
+ * This is a result of Strongarm vars now living in the DB, so unlike other
+ * ctools components, an update of this Feature with a variable in code but
+ * not the database, should remove the variable form the Feature.
+ */
+function alternate_variable_features_export($data, &$export, $module_name) {
+  // First delegate to the Features ctools export
+  $pipe = ctools_component_features_export('alternate_variable', $data, $export, $module_name);
+
+  // Then remove any vars from the export that are only in code
+  $vars = alt_vars_vars_load(TRUE, TRUE);
+  foreach ($data as $object_name) {
+    if (!isset($vars[$object_name]) || !empty($vars[$object_name]->in_code_only)) {
+      unset($export['features']['variable'][$object_name]);
+    }
+  }
+  return $pipe;
+}
+
+/**
+ * Implements hook_features_export_render().
+ *
+ * Loads default values from the DB since it is now the system of record.
+ */
+function alternate_variable_features_export_render($module, $data) {
+  ctools_include('export');
+  $schema = ctools_export_get_schema('alternate_variable');
+  $code = '  $export = array();' . "\n\n";
+  $identifier = $schema['export']['identifier'];
+  $result = db_select('alternate_variable', 'av')
+      ->fields('av', array('name', 'value'))
+      ->condition('name', $data, 'IN')
+      ->orderBy('name')
+      ->execute();
+  foreach ($result as $object) {
+    $object = _ctools_export_unpack_object($schema, $object);
+    $code .= _ctools_features_export_crud_export('alternate_variable', $object, '  ');
+    $code .= "  \$export[" . ctools_var_export($object->name) . "] = \${$identifier};\n\n";
+  }
+  $code .= '  return $export;';
+
+  return array($schema['export']['default hook'] => $code);
+}
